@@ -1,56 +1,77 @@
-# from pymongo import MongoClient
-# from flask import Flask, request, render_template
-# from chatterbot import ChatBot
-# from chatterbot.trainers import ListTrainer
-# from pyttsx3 import engine
-# from requests import get
-# from bs4 import BeautifulSoup
-# import os
-# import pyttsx3
-# from queue import Queue
-# # from googlesearch import search
-# # import requests
-# from flask import jsonify
-#
-# app = Flask(__name__)
-#
-# # Initialize a queue to handle text-to-speech requests
-# tts_queue = Queue()
-# # Initialize the MongoDB client
-# client = None
-#
-# # Initialize the ChatBot
+from gensim.models import Word2Vec
+from gensim import downloader as api
+import numpy as np
+from pymongo import MongoClient
+from flask import Flask, render_template, request, jsonify
+from chatterbot import ChatBot
+from chatterbot.trainers import ListTrainer
+from requests import get
+from bs4 import BeautifulSoup
+import os
+
+app = Flask(__name__)
+
+# Connect to MongoDB
+client = MongoClient('mongodb://localhost:27017/')  # Replace with your MongoDB connection string
+db = client['data']  # Choose or create a database
+collection = db['chats']  # Choose or create a collection
+
 # bot = ChatBot('ChatBot')
 # trainer = ListTrainer(bot)
+
+# Create an empty ListTrainer instance
 #
-# # Train the chatbot with data
-# for file in os.listdir('C:\\Users\\charu\\PycharmProjects\\flaskProject1\\data'):
-#     chats = open('C:\\Users\\charu\\PycharmProjects\\flaskProject1\\data\\' + file, 'r').readlines()
-#     chats = [chat.lower() for chat in chats]
-#     trainer.train(chats)
-#
-# THRESHOLD_SIMILARITY = 10  # Adjust the threshold as needed
-#
-# engine = pyttsx3.init()
-# voices = engine.getProperty('voices')
-# engine.setProperty('voice', voices[1].id)  # Index 1 usually corresponds to a female voice, but you can test to ensure
-#
-#
-# @app.route("/")
-# def hello():
-#     return render_template('chat.html')
-#
-#
-# @app.route("/ask", methods=['POST'])
+# Create an instance of the ChatBot class
+chatbot = ChatBot("MyChatBot")
+
+# Create an instance of the ListTrainer class without passing any additional arguments
+trainer = ListTrainer(chatbot)
+
+# Train the chatbot with data
+trainer.train(["Hi there!", "Hello!"])
+
+
+
+# Train the chatbot with data
+for file in os.listdir('C:\\Users\\charu\\PycharmProjects\\flaskProject1\\data'):
+    chats = open('C:\\Users\\charu\\PycharmProjects\\flaskProject1\\data\\' + file, 'r').readlines()
+    chats = [chat.lower() for chat in chats]
+    trainer.train(chats)
+
+
+@app.route("/")
+def hello():
+    return render_template('chat.html')
+
+
+# Load Word2Vec model
+word_vectors = api.load("glove-wiki-gigaword-100")
+
+
+# Function to calculate semantic similarity between two sentences
+def semantic_similarity(sentence1, sentence2):
+    tokens1 = sentence1.split()
+    tokens2 = sentence2.split()
+    vector1 = np.mean([word_vectors[word] for word in tokens1 if word in word_vectors], axis=0)
+    vector2 = np.mean([word_vectors[word] for word in tokens2 if word in word_vectors], axis=0)
+    if np.all(vector1) and np.all(vector2):
+        similarity_score = np.dot(vector1, vector2) / (np.linalg.norm(vector1) * np.linalg.norm(vector2))
+        return similarity_score
+    else:
+        return 0.0  # If any of the vectors is all zeros, return 0 similarity
+
+
+DEFAULT_THRESHOLD = 0.8
+
+
+# Modify the ask() function to utilize semantic similarity
+@app.route("/ask", methods=['POST'])
 # def ask():
-#     global client
-#
-#     # Reinitialize the MongoDB client if it's closed
-#     if client is None:
-#         client = MongoClient('mongodb://localhost:27017/')
-#
 #     # Get user's message
 #     message = str(request.form['messageText'])
+#
+#     # Get the threshold from request parameters or use the default value
+#     threshold = float(request.form.get('threshold', DEFAULT_THRESHOLD))
 #
 #     # Get chatbot's response
 #     bot_response = bot.get_response(message)
@@ -61,111 +82,58 @@
 #         'bot_response': str(bot_response)
 #     }
 #     try:
-#         db = client['data']  # Choose or create a database
-#         collection = db['chat']  # Choose or create a collection
 #         collection.insert_one(conversation_entry)
 #     except Exception as e:
 #         print("Error inserting conversation into MongoDB:", e)
 #
 #     # Check chatbot's confidence
 #     if bot_response.confidence > 0.1:
-#         response_text = str(bot_response)
+#         return jsonify({'status': 'OK', 'answer': str(bot_response)})
 #     elif message == "bye":
-#         response_text = 'Hope to see you soon'
+#         return jsonify({'status': 'OK', 'answer': 'Hope to see you soon'})
 #     else:
-#         try:
-#             url = "https://en.wikipedia.org/wiki/" + message
-#             page = get(url).text
-#             soup = BeautifulSoup(page, "html.parser")
-#             p = soup.find_all("p")
-#             response_text = p[1].text
-#         except IndexError as error:
-#             response_text = 'Sorry, I have no idea about that.'
+#         # Find most similar question from training data
+#         similar_question = max(trainer.train([]), key=lambda x: semantic_similarity(message, x.text))
+#         # Get response corresponding to similar question if similarity score is above the threshold
+#         if semantic_similarity(message, similar_question.text) > threshold:
+#             return jsonify({'status': 'OK', 'answer': bot.get_response(similar_question.text).text})
+#         else:
+#             try:
+#                 url = "https://en.wikipedia.org/wiki/" + message
+#                 page = get(url).text
+#                 soup = BeautifulSoup(page, "html.parser")
+#                 p = soup.find_all("p")
+#                 return jsonify({'status': 'OK', 'answer': p[1].text})
 #
-#     tts_queue.put(response_text)
+#             except IndexError as error:
+#                 return jsonify({'status': 'OK', 'answer': 'Sorry, I have no idea about that.'})
 #
-#     return jsonify({'status': 'OK', 'answer': response_text})
-#
-#
-# def handle_tts_requests():
-#     while True:
-#         # Get request from the queue
-#         text = tts_queue.get()
-#
-#         # Convert text to speech using pyttsx3
-#         engine.say(text)
-#         engine.runAndWait()
-#
-#
-# # Start a separate thread to handle text-to-speech requests
-# from threading import Thread
-#
-# tts_thread = Thread(target=handle_tts_requests)
-# tts_thread.daemon = True
-# tts_thread.start()
 #
 # if __name__ == "__main__":
 #     app.run()
 
-
-from pymongo import MongoClient
-from flask import Flask, request, render_template
-from chatterbot import ChatBot
-from chatterbot.trainers import ListTrainer
-from pyttsx3 import init, engine
-from requests import get
-from bs4 import BeautifulSoup
-import os
-import pyttsx3
-from queue import Queue
-from flask import jsonify
-import threading
-
-from try2 import voices
-
-app = Flask(__name__)
-
-# Initialize a queue to handle text-to-speech requests
-tts_queue = Queue()
-# Initialize the MongoDB client
-client = None
-
-# Initialize the ChatBot
-bot = ChatBot('ChatBot')
-trainer = ListTrainer(bot)
-
-# Train the chatbot with data
-for file in os.listdir('C:\\Users\\charu\\PycharmProjects\\flaskProject1\\data'):
-    chats = open('C:\\Users\\charu\\PycharmProjects\\flaskProject1\\data\\' + file, 'r').readlines()
-    chats = [chat.lower() for chat in chats]
-    trainer.train(chats)
-
-THRESHOLD_SIMILARITY = 10  # Adjust the threshold as needed
-
-
-# engine = init()
-# voices = engine.getProperty('voices')
-# engine.setProperty('voice', voices[1].id)  # Index 1 usually corresponds to a female voice, but you can test to ensure
-
-
-@app.route("/")
-def hello():
-    return render_template('chat.html')
-
-
-@app.route("/ask", methods=['POST'])
 def ask():
-    global client
-
-    # Reinitialize the MongoDB client if it's closed
-    if client is None:
-        client = MongoClient('mongodb://localhost:27017/')
-
     # Get user's message
     message = str(request.form['messageText'])
 
-    # Get chatbot's response
-    bot_response = bot.get_response(message)
+    # Get the threshold from request parameters or use the default value
+    threshold = float(request.form.get('threshold', DEFAULT_THRESHOLD))
+
+    # Find most similar question from training data
+    similar_question = max(chatbot.storage.filter(), key=lambda x: semantic_similarity(message, x.text))
+
+    # Get response corresponding to similar question if similarity score is above the threshold
+    if semantic_similarity(message, similar_question.text) > threshold:
+        bot_response = chatbot.get_response(similar_question.text).text
+    else:
+        try:
+            url = "https://en.wikipedia.org/wiki/" + message
+            page = get(url).text
+            soup = BeautifulSoup(page, "html.parser")
+            p = soup.find_all("p")
+            bot_response = p[1].text
+        except IndexError as error:
+            bot_response = 'Sorry, I have no idea about that.'
 
     # Insert conversation into MongoDB collection
     conversation_entry = {
@@ -173,69 +141,11 @@ def ask():
         'bot_response': str(bot_response)
     }
     try:
-        db = client['data']  # Choose or create a database
-        collection = db['chat']  # Choose or create a collection
         collection.insert_one(conversation_entry)
     except Exception as e:
         print("Error inserting conversation into MongoDB:", e)
 
-    # Check chatbot's confidence
-    if bot_response.confidence > 0.1:
-        response_text = str(bot_response)
-    elif message == "bye":
-        response_text = 'Hope to see you soon'
-    else:
-        try:
-            url = "https://en.wikipedia.org/wiki/" + message
-            page = get(url).text
-            soup = BeautifulSoup(page, "html.parser")
-            p = soup.find_all("p")
-            response_text = p[1].text
-        except IndexError as error:
-            response_text = 'Sorry, I have no idea about that.'
-
-    return jsonify({'status': 'OK', 'answer': response_text})
-
-
-# def handle_tts_requests():
-#     while True:
-#         # Get request from the queue
-#         text = tts_queue.get()
-#
-#         # Convert text to speech using pyttsx3
-#         engine.say(text)
-#         engine.runAndWait()
-#
-#
-# # Start a separate thread to handle text-to-speech requests
-# tts_thread = threading.Thread(target=handle_tts_requests)
-# tts_thread.daemon = True
-# tts_thread.start()
-
-def handle_tts_requests():
-    while True:
-        # Get request from the queue
-        text = tts_queue.get()
-
-        # Initialize the pyttsx3 engine
-        engine = pyttsx3.init()
-
-        # Get all available voices
-        voices = engine.getProperty('voices')
-
-        # Set the female voice if available
-        female_voice = None
-        for voice in voices:
-            if "female" in voice.name.lower():
-                female_voice = voice
-                break
-
-        if female_voice:
-            engine.setProperty('voice', female_voice.id)
-
-        # Convert text to speech using pyttsx3
-        engine.say(text)
-        engine.runAndWait()
+    return jsonify({'status': 'OK', 'answer': bot_response})
 
 
 if __name__ == "__main__":
